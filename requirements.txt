@@ -1,4 +1,6 @@
 asdfghjkl
+torch>=2.0.0
+torchvision>=0.15.0
 backpack-for-pytorch==1.5.2
 blobfile==2.0.2
 einops==0.6.1
@@ -7,7 +9,6 @@ keras==2.13.1
 ml-collections==0.1.1
 numpy==1.23.4
 omegaconf==2.1.1
-python
 pytorch-lightning==1.4.2
 tensorflow==2.13.0
 requests==2.31.0
