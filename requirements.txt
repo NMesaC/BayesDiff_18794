@@ -1,6 +1,4 @@
 asdfghjkl
-torch>=2.0.0
-torchvision>=0.15.0
 backpack-for-pytorch==1.5.2
 blobfile==2.0.2
 einops==0.6.1
