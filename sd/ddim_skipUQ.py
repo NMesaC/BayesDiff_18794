@@ -34,7 +34,7 @@ def load_model_from_config(config, ckpt, verbose=False):
     model.eval()
     return model
 
-def conditioned_exp_iteration(model, exp_xt, seq, timestep, pre_wuq, mc_eps_exp_t=None, acc_eps_t = None):
+def conditioned_exp_iteration(model, exp_xt, seq, timestep, pre_wuq, mc_eps_exp_t=None, acc_eps_t=None):
     if pre_wuq == True:
         return exp_iteration(model, exp_xt, seq, timestep, mc_eps_exp_t)
     else:
@@ -56,6 +56,7 @@ def conditioned_var_iteration(model, var_xt, cov_xt_epst, var_epst, seq, timeste
 
 def get_scaled_var_eps(scale, var_eps_c, var_eps_uc):
     return pow(1-scale, 2)* var_eps_uc + pow(scale, 2)* var_eps_c
+
 def get_scaled_exp_eps(scale, exp_eps_c, exp_eps_uc):
     return (1-scale)* exp_eps_uc + scale* exp_eps_c
 
@@ -141,15 +142,17 @@ def main():
     )
     parser.add_argument(
         "--laion_art_path",
-        type=str,)
+        type=str,
+    )
     parser.add_argument(
         "--local_image_path",
-        type=str,)
+        type=str,
+    )
     parser.add_argument("--mc_size", type=int, default=10)
     parser.add_argument("--sample_batch_size", type=int, default=8)
     parser.add_argument("--train_la_batch_size", type=int, default=4)
     parser.add_argument("--train_la_data_size", type=int, default=16)
-    parser.add_argument("--timesteps", type=int, default= 50)
+    parser.add_argument("--timesteps", type=int, default=50)
     parser.add_argument('--device', type=int, default=0)
     parser.add_argument('--total_n_samples', type=int, default=80)
     opt = parser.parse_args()
@@ -158,47 +161,43 @@ def main():
 
     config = OmegaConf.load(f"{opt.config}")
     model = load_model_from_config(config, f"{opt.ckpt}")
-    # print(model.model.diffusion_model.out[2])
-    # Conv2d(320, 4, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
 
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     model = model.to(device)
-    train_dataset= laion_dataset(model, opt)
-    train_dataloader= torch.utils.data.DataLoader(train_dataset, batch_size=opt.train_la_batch_size, shuffle=False)
+    train_dataset = laion_dataset(model, opt)
+    train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=opt.train_la_batch_size, shuffle=False)
     custom_ld = CustomLD(model, train_dataloader)
 
     fixed_xT = torch.randn([opt.total_n_samples, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
-##########   get t sequence (note that t is different from timestep)  ########## 
 
+    ##########   get t sequence (note that t is different from timestep)  ########## 
     skip = model.num_timesteps // opt.timesteps
     seq = range(0, model.num_timesteps, skip)
 
-#########   get skip UQ rules  ##########  
-# if uq_array[i] == False, then we use origin_dpmsolver_update from t_seq[i] to t_seq[i-1]
+    #########   get skip UQ rules  ##########  
+    # if uq_array[i] == False, then we use origin_dpmsolver_update from t_seq[i] to t_seq[i-1]
     uq_array = [False] * (opt.timesteps)
     for i in range(opt.timesteps-1, 0, -5):
         uq_array[i] = True
     
-#########   get prompt  ##########  
+    #########   get prompt  ##########  
     if opt.from_file:
         print(f"reading prompts from {opt.from_file}")
         with open(opt.from_file, "r") as f:
             data = f.read().splitlines()
     else:
-        c = model.get_learned_conditioning(opt.prompt)
-        c = torch.concat(opt.sample_batch_size * [c], dim=0)
-        uc = model.get_learned_conditioning(opt.sample_batch_size * [""])
-        exp_dir = f'./ddim_exp/skipUQ/cfg{opt.scale}_{opt.prompt}_train{opt.train_la_data_size}_step{opt.timesteps}_S{opt.mc_size}/'
-        os.makedirs(exp_dir, exist_ok=True)
+        data = [opt.prompt]  # Make it a list so the for loop works
 
-#########   start sample  ########## 
+    #########   start sample  ########## 
     total_n_samples = opt.total_n_samples
     if total_n_samples % opt.sample_batch_size != 0:
         raise ValueError("Total samples for sampling must be divided exactly by opt.sample_batch_size, but got {} and {}".format(total_n_samples, opt.sample_batch_size))
+    
     n_rounds = total_n_samples // opt.sample_batch_size
     var_sum = torch.zeros((opt.sample_batch_size, n_rounds)).to(device)
     img_id = 1000000
-    precision_scope = autocast if opt.precision=="autocast" else nullcontext
+    precision_scope = autocast if opt.precision == "autocast" else nullcontext
+    
     with torch.no_grad():
         with precision_scope("cuda"):
             with model.ema_scope():
@@ -214,8 +213,9 @@ def main():
                         range(n_rounds), desc="Generating image samples for FID evaluation."
                     ):
                         
-                        xT, timestep, mc_sample_size  = fixed_xT[loop*opt.sample_batch_size:(loop+1)*opt.sample_batch_size, :, :, :], opt.timesteps-1, opt.mc_size
+                        xT, timestep, mc_sample_size = fixed_xT[loop*opt.sample_batch_size:(loop+1)*opt.sample_batch_size, :, :, :], opt.timesteps-1, opt.mc_size
                         T = seq[timestep]
+                        
                         if uq_array[timestep] == True:
                             xt_next = xT
                             exp_xt_next, var_xt_next = xT, torch.zeros_like(xT).to(device)
@@ -245,12 +245,13 @@ def main():
                                 eps_mu_t = eps_mu_t_next
 
                             if uq_array[timestep] == True:
-                                eps_t= sample_from_gaussion(eps_mu_t, eps_var_t)
+                                eps_t = sample_from_gaussion(eps_mu_t, eps_var_t)
                                 xt_next = singlestep_ddim_sample(model, xt, seq, timestep, eps_t)
                                 exp_xt_next = conditioned_exp_iteration(model, exp_xt, seq, timestep, pre_wuq=uq_array[timestep], mc_eps_exp_t=mc_eps_exp_t)
-                                var_xt_next = conditioned_var_iteration(model, var_xt, cov_xt_epst, var_epst=eps_var_t, seq=seq, timestep=timestep, pre_wuq= uq_array[timestep])
+                                var_xt_next = conditioned_var_iteration(model, var_xt, cov_xt_epst, var_epst=eps_var_t, seq=seq, timestep=timestep, pre_wuq=uq_array[timestep])
+                                
                                 if uq_array[timestep-1] == True:
-                                    list_xt_next_i, list_eps_mu_t_next_i=[], []
+                                    list_xt_next_i, list_eps_mu_t_next_i = [], []
                                     for _ in range(mc_sample_size):
                                         var_xt_next = torch.clamp(var_xt_next, min=0)
                                         xt_next_i = sample_from_gaussion(exp_xt_next, var_xt_next)
@@ -266,17 +267,18 @@ def main():
                                     eps_var_t_next = get_scaled_var_eps(opt.scale, eps_var_t_next_c, eps_var_t_next_uc)
                                     list_xt_next_i = torch.stack(list_xt_next_i, dim=0).to(device)
                                     list_eps_mu_t_next_i = torch.stack(list_eps_mu_t_next_i, dim=0).to(device)
-                                    cov_xt_next_epst_next = torch.mean(list_xt_next_i*list_eps_mu_t_next_i, dim=0)-exp_xt_next*torch.mean(list_eps_mu_t_next_i, dim=0)
+                                    cov_xt_next_epst_next = torch.mean(list_xt_next_i*list_eps_mu_t_next_i, dim=0) - exp_xt_next*torch.mean(list_eps_mu_t_next_i, dim=0)
                                 else:
                                     eps_mu_t_next_c = custom_ld.accurate_forward(xt_next, (torch.ones(opt.sample_batch_size) * seq[timestep-1]).to(xt.device), c=c)
                                     eps_mu_t_next_uc = custom_ld.accurate_forward(xt_next, (torch.ones(opt.sample_batch_size) * seq[timestep-1]).to(xt.device), c=uc)
                                     eps_mu_t_next = get_scaled_exp_eps(scale=opt.scale, exp_eps_c=eps_mu_t_next_c, exp_eps_uc=eps_mu_t_next_uc)
                             else:
                                 xt_next = singlestep_ddim_sample(model, xt, seq, timestep, eps_mu_t)
-                                exp_xt_next = conditioned_exp_iteration(model, exp_xt, seq, timestep, pre_wuq=uq_array[timestep], acc_eps_t = eps_mu_t)
-                                var_xt_next = conditioned_var_iteration(model, var_xt, cov_xt_epst= None, var_epst=None, seq= seq, timestep=timestep, pre_wuq= uq_array[timestep])
+                                exp_xt_next = conditioned_exp_iteration(model, exp_xt, seq, timestep, pre_wuq=uq_array[timestep], acc_eps_t=eps_mu_t)
+                                var_xt_next = conditioned_var_iteration(model, var_xt, cov_xt_epst=None, var_epst=None, seq=seq, timestep=timestep, pre_wuq=uq_array[timestep])
+                                
                                 if uq_array[timestep-1] == True:
-                                    list_xt_next_i, list_eps_mu_t_next_i=[], []
+                                    list_xt_next_i, list_eps_mu_t_next_i = [], []
                                     for _ in range(mc_sample_size):
                                         var_xt_next = torch.clamp(var_xt_next, min=0)
                                         xt_next_i = sample_from_gaussion(exp_xt_next, var_xt_next)
@@ -292,7 +294,7 @@ def main():
                                     eps_var_t_next = get_scaled_var_eps(opt.scale, eps_var_t_next_c, eps_var_t_next_uc)
                                     list_xt_next_i = torch.stack(list_xt_next_i, dim=0).to(device)
                                     list_eps_mu_t_next_i = torch.stack(list_eps_mu_t_next_i, dim=0).to(device)
-                                    cov_xt_next_epst_next = torch.mean(list_xt_next_i*list_eps_mu_t_next_i, dim=0)-exp_xt_next*torch.mean(list_eps_mu_t_next_i, dim=0)
+                                    cov_xt_next_epst_next = torch.mean(list_xt_next_i*list_eps_mu_t_next_i, dim=0) - exp_xt_next*torch.mean(list_eps_mu_t_next_i, dim=0)
                                 else:
                                     eps_mu_t_next_c = custom_ld.accurate_forward(xt_next, (torch.ones(opt.sample_batch_size) * seq[timestep-1]).to(xt.device), c=c)
                                     eps_mu_t_next_uc = custom_ld.accurate_forward(xt_next, (torch.ones(opt.sample_batch_size) * seq[timestep-1]).to(xt.device), c=uc)
@@ -302,11 +304,6 @@ def main():
                         var_sum[:, loop] = var_xt_next.sum(dim=(1,2,3))
                         x_samples = model.decode_first_stage(xt_next)
                         x = torch.clamp((x_samples + 1.0) / 2.0, min=0.0, max=1.0)
-                        # os.makedirs(os.path.join(exp_dir, 'sam/'), exist_ok=True)
-                        # for i in range(x.shape[0]):
-                        #     path = os.path.join(exp_dir, 'sam/', f"{img_id}.png")
-                        #     tvu.save_image(x.cpu()[i].float(), path)
-                        #     img_id += 1
                         sample_x.append(x)
 
                     sample_x = torch.concat(sample_x, dim=0)
