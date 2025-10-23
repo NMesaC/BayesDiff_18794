@@ -306,6 +306,22 @@ def main():
                         x = torch.clamp((x_samples + 1.0) / 2.0, min=0.0, max=1.0)
                         sample_x.append(x)
 
+                        # Save z_exp and z_var for per-pixel uncertainty analysis
+                        os.makedirs(f'{exp_dir}/z_exp', exist_ok=True)
+                        os.makedirs(f'{exp_dir}/z_var', exist_ok=True)
+
+                        for i in range(opt.sample_batch_size):
+                            sample_id = loop * opt.sample_batch_size + i
+                            torch.save(exp_xt_next[i].detach().cpu(), f'{exp_dir}/z_exp/{sample_id}.pth')
+                            torch.save(var_xt_next[i].detach().cpu(), f'{exp_dir}/z_var/{sample_id}.pth')
+
+                        # Save decoded images as actual image files
+                        os.makedirs(f'{exp_dir}/decoded_images', exist_ok=True)
+                        for i in range(opt.sample_batch_size):
+                            sample_id = loop * opt.sample_batch_size + i
+                            tvu.save_image(x[i].detach().cpu().float(), f'{exp_dir}/decoded_images/{sample_id}.png')
+
+
                     sample_x = torch.concat(sample_x, dim=0)
                     var = []
                     for j in range(n_rounds):
