@@ -1,0 +1,27 @@
+data/
+datasets/
+laion_art/
+**/laion_art/
+**/image_from_url/
+**/image_from_url*/    # handles both unzipped and timestamped variants
+*.zip
+*.tar
+*.gz
+*.npz
+*.npy
+*.csv
+
+# --- Model Checkpoints ---
+checkpoints/
+**/checkpoints/
+*.ckpt
+*.pt
+*.pth
+
+# --- Outputs / Experiments ---
+outputs/
+experiments/
+results/
+logs/
+wandb/
+tensorboard/
