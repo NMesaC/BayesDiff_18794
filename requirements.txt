@@ -20,3 +20,6 @@ pandas
 clip
 kornia
 torchmetrics==0.6.0
+pytorch-fid
+
+
